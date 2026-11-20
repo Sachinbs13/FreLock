@@ -1,4 +1,6 @@
-require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+const fs = require('fs');
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const express = require('express');
 const cors = require('cors');
@@ -23,6 +25,8 @@ app.use(cors(allowedOrigins.length ? { origin: allowedOrigins } : {}));
 app.use(express.json({ limit: '100kb' }));
 app.use(blockOperatorInjection);
 
+let lastDbError = null;
+
 // ── Routes ────────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   const connected = isDbConnected();
@@ -30,6 +34,7 @@ app.get('/api/health', (req, res) => {
     status: connected ? 'ok' : 'degraded',
     message: 'Escrow Platform Backend Running',
     database: connected ? 'connected' : 'disconnected',
+    ...(connected || !lastDbError ? {} : { error: lastDbError }),
   });
 });
 
@@ -44,26 +49,39 @@ app.use('/api/messages', require('./routes/messageRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 
 app.use('/api', notFound);
+
+const publicDir = path.join(__dirname, 'public');
+const indexHtml = path.join(publicDir, 'index.html');
+app.use(express.static(publicDir));
+app.get(/^\/(?!api).*/, (req, res, next) =>
+  fs.existsSync(indexHtml) ? res.sendFile(indexHtml) : next()
+);
+
 app.use(errorHandler);
 
 // ── Startup ───────────────────────────────────────────────────────────────
-const startServer = async () => {
+const connectWithRetry = async () => {
   try {
-    getSecret(); // fail fast if JWT_SECRET is missing in production
-    if (!process.env.JWT_SECRET) {
-      console.warn('Warning: JWT_SECRET is not set — using an insecure development secret.');
-    }
-
     await connectDB();
+    lastDbError = null;
     await seedUsers();
-
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`Server running on http://localhost:${PORT}`);
-    });
   } catch (error) {
-    console.error('Failed to start server:', error.message);
-    process.exit(1);
+    lastDbError = error.message;
+    console.error('MongoDB connection failed (retrying in 15s):', error.message);
+    setTimeout(connectWithRetry, 15000);
   }
+};
+
+const startServer = () => {
+  getSecret(); // fail fast if JWT_SECRET is missing in production
+  if (!process.env.JWT_SECRET) {
+    console.warn('Warning: JWT_SECRET is not set — using an insecure development secret.');
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+    connectWithRetry();
+  });
 };
 
 if (require.main === module) startServer();

@@ -2,12 +2,13 @@ pipeline {
     agent any
 
     environment {
-        AZURE_RG       = 'FreLock-RG'
-        ACR_NAME       = 'frelockacr1362'
-        ACR_LOGIN_SRV  = 'frelockacr1362.azurecr.io'
-        WEBAPP_NAME    = 'frelock-app'
-        IMAGE_REPO     = 'frelock'
-        IMAGE_TAG      = "v${env.BUILD_NUMBER}"
+        AZURE_RG         = 'FreLock-RG'
+        ACR_NAME         = 'frelockacr1362'
+        ACR_LOGIN_SRV    = 'frelockacr1362.azurecr.io'
+        WEBAPP_NAME      = 'frelock-app'
+        IMAGE_REPO       = 'frelock'
+        IMAGE_TAG        = "v${env.BUILD_NUMBER}"
+        AZURE_CONFIG_DIR = 'C:/Users/SACHIN B S/.azure'
     }
 
     stages {
@@ -29,28 +30,20 @@ pipeline {
             }
         }
 
-        stage('Azure Login & Build Image in ACR') {
+        stage('Build & Push Image in Azure ACR') {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'azure-sp',
-                    usernameVariable: 'AZ_CLIENT_ID',
-                    passwordVariable: 'AZ_CLIENT_SECRET'
-                ), string(
-                    credentialsId: 'azure-tenant-id',
-                    variable: 'AZ_TENANT_ID'
-                )]) {
-                    script {
-                        if (isUnix()) {
-                            sh '''
-                                az login --service-principal -u "$AZ_CLIENT_ID" -p "$AZ_CLIENT_SECRET" --tenant "$AZ_TENANT_ID"
-                                az acr build --registry $ACR_NAME --image ${IMAGE_REPO}:${IMAGE_TAG} --image ${IMAGE_REPO}:latest .
-                            '''
-                        } else {
-                            bat '''
-                                az login --service-principal -u "%AZ_CLIENT_ID%" -p "%AZ_CLIENT_SECRET%" --tenant "%AZ_TENANT_ID%"
-                                az acr build --registry %ACR_NAME% --image %IMAGE_REPO%:%IMAGE_TAG% --image %IMAGE_REPO%:latest .
-                            '''
-                        }
+                script {
+                    if (isUnix()) {
+                        sh '''
+                            az account show
+                            az acr build --registry $ACR_NAME --image ${IMAGE_REPO}:${IMAGE_TAG} --image ${IMAGE_REPO}:latest .
+                        '''
+                    } else {
+                        powershell '''
+                            $env:PATH += ";C:\\Program Files\\Microsoft SDKs\\Azure\\CLI2\\wbin"
+                            az account show
+                            az acr build --registry $env:ACR_NAME --image "$env:IMAGE_REPO`:$env:IMAGE_TAG" --image "$env:IMAGE_REPO`:latest" .
+                        '''
                     }
                 }
             }
@@ -73,6 +66,7 @@ pipeline {
                         '''
                     } else {
                         powershell '''
+                            $env:PATH += ";C:\\Program Files\\Microsoft SDKs\\Azure\\CLI2\\wbin"
                             $acrPwd = (az acr credential show --name $env:ACR_NAME --query "passwords[0].value" -o tsv)
                             az webapp config container set `
                               --resource-group $env:AZURE_RG `
@@ -97,18 +91,6 @@ pipeline {
                     } else {
                         bat 'curl.exe -sS https://%WEBAPP_NAME%.azurewebsites.net/api/health'
                     }
-                }
-            }
-        }
-    }
-
-    post {
-        always {
-            script {
-                if (isUnix()) {
-                    sh 'az logout || true'
-                } else {
-                    bat 'az logout || exit /b 0'
                 }
             }
         }
